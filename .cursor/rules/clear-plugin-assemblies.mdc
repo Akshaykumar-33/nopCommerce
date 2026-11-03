@@ -1,0 +1,23 @@
+---
+description: Rebuild checked-in ClearPluginAssemblies when its TFM or source changes
+globs: src/Build/**/*
+alwaysApply: false
+---
+
+# ClearPluginAssemblies
+
+`src/Build/ClearPluginAssemblies.dll` and `.runtimeconfig.json` are committed build outputs. `ClearPluginAssemblies.proj` hardcodes `<TargetFramework>` and does not always pick up `Directory.Build.props`.
+
+When you change the helper source or the solution TFM:
+
+1. Update TFM in `src/Build/src/ClearPluginAssemblies/*.csproj` **and** `src/Build/ClearPluginAssemblies.proj`
+2. Rebuild and copy outputs into `src/Build/`
+3. Commit the new DLL and runtimeconfig with the source change
+
+```bash
+dotnet build src/Build/src/ClearPluginAssemblies/ClearPluginAssemblies.csproj -c Release
+cp -f src/Build/src/ClearPluginAssemblies/bin/Release/net11.0/ClearPluginAssemblies.dll src/Build/
+cp -f src/Build/src/ClearPluginAssemblies/bin/Release/net11.0/ClearPluginAssemblies.runtimeconfig.json src/Build/
+```
+
+MSB3073 / exit code 150 from plugin builds usually means a stale runtimeconfig still targeting the previous `netX.0`.

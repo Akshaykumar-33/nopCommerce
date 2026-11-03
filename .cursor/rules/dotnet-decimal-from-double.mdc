@@ -1,0 +1,31 @@
+---
+description: Avoid raw double-to-decimal conversions for prices, money, and shipping dimensions
+globs: **/PriceCalculation*.cs,**/OrderTotal*.cs,**/ShippingService.cs,**/CalculateDimensions*.cs,**/*Price*Tests.cs,**/*OrderTotal*Tests.cs
+alwaysApply: false
+---
+
+# Decimal vs double
+
+Money and catalog prices are `decimal`. Binary `double` literals and NUnit `[TestCase]` numbers are not exact decimals. On modern .NET, `(decimal)doubleValue` / `Convert.ToDecimal(double)` keep full binary precision and break equality checks.
+
+```csharp
+// ❌ BAD: TestCase doubles cast straight to decimal
+[TestCase(12.37, 12.37)]
+public void CanRound(decimal value, decimal expected) { ... }
+
+// ✅ GOOD: accept doubles from TestCase, convert with 15 significant digits
+[TestCase(12.37, 12.37)]
+public void CanRound(double value, double expected)
+{
+    Round(ToDecimal(value)).Should().Be(ToDecimal(expected));
+}
+
+static decimal ToDecimal(double value)
+{
+    Span<char> text = stackalloc char[32];
+    value.TryFormat(text, out var length, "G15", CultureInfo.InvariantCulture);
+    return decimal.Parse(text[..length], NumberStyles.Float, CultureInfo.InvariantCulture);
+}
+```
+
+Prefer `12.37m` decimal literals in production code. When bridging unavoidable `double` math (for example `Math.Pow` for package cube roots), use the same `G15` conversion if product behavior depended on pre-.NET 11 rounding—do not leave a bare `Convert.ToDecimal(Math.Pow(...))`.
