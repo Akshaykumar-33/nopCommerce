@@ -319,7 +319,10 @@ public static class ServiceCollectionExtensions
         //add basic MVC feature
         var mvcBuilder = services.AddControllersWithViews();
 
+        // Theme and plugin views are edited on disk and compiled when a request arrives.
+#pragma warning disable ASPDEPR003
         mvcBuilder.AddRazorRuntimeCompilation();
+#pragma warning restore ASPDEPR003
 
         var appSettings = Singleton<AppSettings>.Instance;
         if (appSettings.Get<CommonConfig>().UseSessionStateTempDataProvider)
