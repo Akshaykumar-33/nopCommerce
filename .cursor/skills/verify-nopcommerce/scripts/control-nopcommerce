@@ -1,0 +1,965 @@
+#!/usr/bin/env node
+// Drive a disposable nopCommerce storefront. See SKILL.md in the parent directory.
+
+import { createRequire } from 'node:module';
+import { spawn, spawnSync } from 'node:child_process';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import net from 'node:net';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
+const SKILL_ROOT = path.resolve(SCRIPT_DIR, '..');
+const REPO_ROOT = process.env.NOPCOMMERCE_ROOT || findRepo(SKILL_ROOT);
+const PUBLISH_DIR = path.join(SKILL_ROOT, '.publish');
+const STAMP_PATH = path.join(PUBLISH_DIR, 'build-stamp.json');
+const RUNS_ROOT = '/tmp/nopcommerce-verify/runs';
+const CURRENT_PATH = '/tmp/nopcommerce-verify/current';
+const ROLE_PATH = '/tmp/nopcommerce-verify/pg-role.json';
+const DB_USER = 'nop_verify';
+const ADMIN_EMAIL = 'verify@example.com';
+const ADMIN_PASSWORD = 'Verify-store-1';
+const PRODUCT_VERSION = readProductVersion();
+
+const INSTALL_TIMEOUT_MS = 30 * 60 * 1000;
+const START_TIMEOUT_MS = 180 * 1000;
+const STORE_TIMEOUT_MS = 180 * 1000;
+
+function findRepo(start) {
+  let dir = start;
+  while (dir !== path.dirname(dir)) {
+    if (fs.existsSync(path.join(dir, 'src', 'NopCommerce.sln'))) return dir;
+    dir = path.dirname(dir);
+  }
+  throw new Error('Cannot find src/NopCommerce.sln. Set NOPCOMMERCE_ROOT to the nopCommerce checkout.');
+}
+
+function readProductVersion() {
+  const csproj = path.join(findRepoSafe(), 'src', 'Presentation', 'Nop.Web', 'Nop.Web.csproj');
+  try {
+    const text = fs.readFileSync(csproj, 'utf8');
+    const match = text.match(/<Version>([^<]+)<\/Version>/);
+    return match ? match[1].trim() : 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
+function findRepoSafe() {
+  try {
+    return process.env.NOPCOMMERCE_ROOT || findRepo(SKILL_ROOT);
+  } catch {
+    return SKILL_ROOT;
+  }
+}
+
+function log(message) {
+  const stamp = new Date().toISOString();
+  process.stderr.write(`[${stamp}] ${message}\n`);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parseArgs(argv) {
+  const positional = [];
+  const opts = {};
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === '--') continue;
+    if (arg.startsWith('--')) {
+      const key = arg.slice(2);
+      const next = argv[i + 1];
+      if (next === undefined || next.startsWith('--')) opts[key] = true;
+      else {
+        opts[key] = next;
+        i += 1;
+      }
+    } else positional.push(arg);
+  }
+  return { positional, opts };
+}
+
+function dotnetPath() {
+  const candidates = [
+    process.env.DOTNET_ROOT && path.join(process.env.DOTNET_ROOT, 'dotnet'),
+    path.join(os.homedir(), '.dotnet', 'dotnet'),
+    '/usr/share/dotnet/dotnet',
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  const found = spawnSync('bash', ['-lc', 'command -v dotnet'], { encoding: 'utf8' });
+  const resolved = (found.stdout || '').trim();
+  if (found.status === 0 && resolved) return resolved;
+  throw new Error('dotnet was not found. Install the .NET 10 SDK and put it on PATH, or set DOTNET_ROOT.');
+}
+
+function dotnetEnv() {
+  const bin = dotnetPath();
+  const root = path.dirname(bin);
+  return {
+    ...process.env,
+    DOTNET_ROOT: root,
+    DOTNET_CLI_TELEMETRY_OPTOUT: '1',
+    DOTNET_NOLOGO: '1',
+    PATH: `${root}${path.delimiter}${process.env.PATH || ''}`,
+  };
+}
+
+function runChecked(command, args, options = {}) {
+  const result = spawnSync(command, args, {
+    encoding: 'utf8',
+    stdio: options.inherit ? 'inherit' : ['ignore', 'pipe', 'pipe'],
+    cwd: options.cwd,
+    env: options.env || process.env,
+  });
+  if (result.status !== 0) {
+    const detail = options.inherit ? '' : `\n${result.stdout || ''}\n${result.stderr || ''}`;
+    throw new Error(`${command} ${args.join(' ')} exited ${result.status}.${detail}`);
+  }
+  return result;
+}
+
+function gitHead() {
+  const result = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: REPO_ROOT, encoding: 'utf8' });
+  if (result.status !== 0) throw new Error('git rev-parse HEAD failed');
+  return result.stdout.trim();
+}
+
+function sha256File(file) {
+  const hash = crypto.createHash('sha256');
+  hash.update(fs.readFileSync(file));
+  return hash.digest('hex');
+}
+
+function readText(file) {
+  return fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '');
+}
+
+function readJson(file) {
+  return JSON.parse(readText(file));
+}
+
+function writeJson(file, value) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function pidAlive(pid) {
+  if (!pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function readCmdline(pid) {
+  try {
+    return fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').replace(/\0/g, ' ');
+  } catch {
+    return '';
+  }
+}
+
+function processCwd(pid) {
+  try {
+    return fs.readlinkSync(`/proc/${pid}/cwd`);
+  } catch {
+    return '';
+  }
+}
+
+function portOwnedByPid(port, pid) {
+  const hex = Number(port).toString(16).toUpperCase().padStart(4, '0');
+  const inodes = new Set();
+  for (const table of ['/proc/net/tcp', '/proc/net/tcp6']) {
+    if (!fs.existsSync(table)) continue;
+    const lines = fs.readFileSync(table, 'utf8').split('\n').slice(1);
+    for (const line of lines) {
+      const parts = line.trim().split(/\s+/);
+      if (parts.length < 10) continue;
+      const localPort = (parts[1].split(':')[1] || '').toUpperCase();
+      if (localPort === hex && parts[3] === '0A') inodes.add(parts[9]);
+    }
+  }
+  const fdDir = `/proc/${pid}/fd`;
+  if (!fs.existsSync(fdDir)) return false;
+  for (const fd of fs.readdirSync(fdDir)) {
+    try {
+      const target = fs.readlinkSync(path.join(fdDir, fd));
+      const match = /socket:\[(\d+)\]/.exec(target);
+      if (match && inodes.has(match[1])) return true;
+    } catch {
+      // fd disappeared
+    }
+  }
+  return false;
+}
+
+function psqlAdmin(sql) {
+  runChecked('sudo', ['-n', '-u', 'postgres', 'psql', '-d', 'postgres', '-v', 'ON_ERROR_STOP=1', '-c', sql]);
+}
+
+function ensurePostgres() {
+  const ready = spawnSync('pg_isready', ['-h', '127.0.0.1', '-p', '5432'], { encoding: 'utf8' });
+  if (ready.status !== 0) {
+    log('PostgreSQL is not accepting connections on 127.0.0.1:5432. Starting the local cluster.');
+    const started = spawnSync('sudo', ['-n', 'pg_ctlcluster', '16', 'main', 'start'], { encoding: 'utf8' });
+    if (started.status !== 0) {
+      const service = spawnSync('sudo', ['-n', 'service', 'postgresql', 'start'], { encoding: 'utf8' });
+      if (service.status !== 0) {
+        throw new Error('PostgreSQL is not running and could not be started. Start it, then rerun launch. pg_isready must succeed for 127.0.0.1:5432.');
+      }
+    }
+  }
+  const again = spawnSync('pg_isready', ['-h', '127.0.0.1', '-p', '5432'], { encoding: 'utf8' });
+  if (again.status !== 0) throw new Error('PostgreSQL is installed but 127.0.0.1:5432 is not accepting connections.');
+  const citext = spawnSync('bash', ['-lc', 'test -f /usr/share/postgresql/16/extension/citext.control'], { encoding: 'utf8' });
+  if (citext.status !== 0) {
+    throw new Error('PostgreSQL citext extension files are missing. Install postgresql-contrib.');
+  }
+}
+
+function ensureRole() {
+  let role;
+  if (fs.existsSync(ROLE_PATH)) role = readJson(ROLE_PATH);
+  if (!role?.password) {
+    role = { user: DB_USER, password: crypto.randomBytes(18).toString('hex') };
+  }
+  const password = role.password.replace(/'/g, '');
+  const sql = `
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${DB_USER}') THEN
+    CREATE ROLE ${DB_USER} LOGIN SUPERUSER PASSWORD '${password}';
+  ELSE
+    ALTER ROLE ${DB_USER} WITH LOGIN SUPERUSER PASSWORD '${password}';
+  END IF;
+END
+$$;`;
+  psqlAdmin(sql);
+  writeJson(ROLE_PATH, { user: DB_USER, password });
+  fs.chmodSync(ROLE_PATH, 0o600);
+  return { user: DB_USER, password };
+}
+
+function createDatabase(database) {
+  if (!/^nopverify[a-z0-9]+$/.test(database)) throw new Error(`Refusing to create unexpected database name ${database}`);
+  psqlAdmin(`CREATE DATABASE ${database} OWNER ${DB_USER};`);
+  psqlAdmin(`REVOKE ALL ON DATABASE ${database} FROM PUBLIC;`);
+  runChecked('sudo', ['-n', '-u', 'postgres', 'psql', '-d', database, '-v', 'ON_ERROR_STOP=1', '-c',
+    'CREATE EXTENSION IF NOT EXISTS citext; CREATE EXTENSION IF NOT EXISTS pgcrypto;']);
+}
+
+function dropDatabase(database) {
+  if (!/^nopverify[a-z0-9]+$/.test(database)) throw new Error(`Refusing to drop unexpected database name ${database}`);
+  psqlAdmin(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${database}' AND pid <> pg_backend_pid();`);
+  psqlAdmin(`DROP DATABASE IF EXISTS ${database};`);
+}
+
+function assertDbLogin(database, user, password) {
+  const result = spawnSync('psql', ['-h', '127.0.0.1', '-U', user, '-d', database, '-c', 'SELECT 1'], {
+    encoding: 'utf8',
+    env: { ...process.env, PGPASSWORD: password },
+  });
+  if (result.status !== 0) {
+    throw new Error(`PostgreSQL rejected password login for ${user} on ${database}.\n${result.stderr || result.stdout}`);
+  }
+}
+
+function freePort(start) {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.once('error', () => resolve(freePort(start + 1)));
+    server.listen(start, '127.0.0.1', () => {
+      const address = server.address();
+      const port = typeof address === 'object' && address ? address.port : start;
+      server.close(() => resolve(port));
+    });
+  });
+}
+
+function ensurePublish() {
+  const dll = path.join(PUBLISH_DIR, 'Nop.Web.dll');
+  const head = gitHead();
+  let stamp = null;
+  if (fs.existsSync(STAMP_PATH)) {
+    try { stamp = readJson(STAMP_PATH); } catch { stamp = null; }
+  }
+  const hash = fs.existsSync(dll) ? sha256File(dll) : '';
+  const rebuild = process.env.NOP_VERIFY_REBUILD === '1'
+    || !hash
+    || !stamp
+    || stamp.commit !== head
+    || stamp.dllSha256 !== hash
+    || stamp.productVersion !== PRODUCT_VERSION;
+  if (!rebuild) {
+    log(`Using published build ${hash.slice(0, 12)} at ${PUBLISH_DIR}`);
+    return stamp;
+  }
+  log('Publishing nopCommerce. The first publish builds the solution and every plugin.');
+  fs.mkdirSync(PUBLISH_DIR, { recursive: true });
+  const env = dotnetEnv();
+  runChecked(dotnetPath(), ['build', 'src/NopCommerce.sln', '-c', 'Release', '-m:2', '--verbosity', 'minimal'], {
+    cwd: REPO_ROOT,
+    env,
+    inherit: true,
+  });
+  runChecked(dotnetPath(), ['publish', 'src/Presentation/Nop.Web/Nop.Web.csproj', '-c', 'Release', '-o', PUBLISH_DIR, '--verbosity', 'minimal'], {
+    cwd: REPO_ROOT,
+    env,
+    inherit: true,
+  });
+  if (!fs.existsSync(dll)) throw new Error(`Publish finished without ${dll}`);
+  const fresh = {
+    commit: head,
+    dllSha256: sha256File(dll),
+    productVersion: PRODUCT_VERSION,
+    publishedAt: new Date().toISOString(),
+  };
+  writeJson(STAMP_PATH, fresh);
+  return fresh;
+}
+
+function copyPublish(contentRoot) {
+  fs.rmSync(contentRoot, { recursive: true, force: true });
+  fs.mkdirSync(contentRoot, { recursive: true });
+  runChecked('cp', ['-a', `${PUBLISH_DIR}/.`, contentRoot]);
+  for (const relative of ['App_Data/appsettings.json', 'App_Data/dataSettings.json', 'App_Data/Settings.txt']) {
+    const target = path.join(contentRoot, relative);
+    if (fs.existsSync(target)) fs.rmSync(target, { force: true });
+  }
+}
+
+function startServer(run) {
+  const logFd = fs.openSync(run.logPath, 'a');
+  const child = spawn(dotnetPath(), ['Nop.Web.dll'], {
+    cwd: run.contentRoot,
+    detached: true,
+    stdio: ['ignore', logFd, logFd],
+    env: {
+      ...dotnetEnv(),
+      ASPNETCORE_URLS: run.url,
+      ASPNETCORE_ENVIRONMENT: 'Production',
+    },
+  });
+  child.unref();
+  fs.closeSync(logFd);
+  run.pid = child.pid;
+  writeJson(run.statePath, run);
+  log(`Started nopCommerce pid ${run.pid} at ${run.url}`);
+  return run.pid;
+}
+
+function stopPid(pid) {
+  if (!pid || !pidAlive(pid)) return;
+  try { process.kill(-pid, 'SIGTERM'); } catch { try { process.kill(pid, 'SIGTERM'); } catch { /* already gone */ } }
+  const deadline = Date.now() + 15000;
+  while (pidAlive(pid) && Date.now() < deadline) spawnSync('sleep', ['0.2']);
+  if (pidAlive(pid)) {
+    try { process.kill(-pid, 'SIGKILL'); } catch { try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ } }
+  }
+}
+
+async function waitForHttp(url, predicate, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  let last = 'no response';
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(url, { redirect: 'manual' });
+      const text = await response.text();
+      last = `status ${response.status}`;
+      if (predicate(response, text)) return text;
+    } catch (error) {
+      last = error instanceof Error ? error.message : String(error);
+    }
+    await sleep(1000);
+  }
+  throw new Error(`Timed out waiting for ${url} (${last}). See the server log.`);
+}
+
+function tailFile(file, lines = 80) {
+  if (!fs.existsSync(file)) return '';
+  const text = fs.readFileSync(file, 'utf8').split('\n');
+  return text.slice(-lines).join('\n');
+}
+
+function loadPlaywright() {
+  const pkgDir = path.join(SKILL_ROOT, 'node_modules', 'playwright');
+  if (!fs.existsSync(pkgDir)) {
+    log('Installing Playwright for the browser harness. Browser binaries are not downloaded; Google Chrome on this machine is used.');
+    runChecked('npm', ['install', '--omit=dev', '--no-audit', '--no-fund'], {
+      cwd: SKILL_ROOT,
+      env: { ...process.env, PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1' },
+      inherit: true,
+    });
+  }
+  const require = createRequire(path.join(SKILL_ROOT, 'package.json'));
+  return require('playwright');
+}
+
+async function launchBrowser(run) {
+  const { chromium } = loadPlaywright();
+  const profile = path.join(run.runDir, 'browser-profile');
+  fs.mkdirSync(profile, { recursive: true });
+  const options = {
+    headless: process.env.NOP_VERIFY_HEADED !== '1',
+    viewport: { width: 1280, height: 900 },
+    locale: 'en-US',
+    acceptDownloads: false,
+    args: ['--no-sandbox', '--disable-dev-shm-usage'],
+  };
+  try {
+    return await chromium.launchPersistentContext(profile, { ...options, channel: 'chrome' });
+  } catch (error) {
+    const chrome = '/usr/local/bin/google-chrome';
+    if (!fs.existsSync(chrome)) throw error;
+    return chromium.launchPersistentContext(profile, { ...options, executablePath: chrome });
+  }
+}
+
+async function dismissCookie(page) {
+  const button = page.locator('#eu-cookie-ok');
+  if (await button.isVisible().catch(() => false)) await button.click();
+}
+
+function rememberedUrl(run) {
+  const file = path.join(run.runDir, 'browser-url.txt');
+  if (!fs.existsSync(file)) return `${run.url}/`;
+  const saved = fs.readFileSync(file, 'utf8').trim();
+  if (!saved.startsWith(run.url)) return `${run.url}/`;
+  return saved;
+}
+
+function rememberUrl(run, url) {
+  if (!url.startsWith(run.url)) throw new Error(`Refusing to record ${url}. It is outside ${run.url}.`);
+  fs.writeFileSync(path.join(run.runDir, 'browser-url.txt'), `${url}\n`);
+}
+
+function pendingFillsPath(run) {
+  return path.join(run.runDir, 'pending-fills.json');
+}
+
+function readPendingFills(run) {
+  const file = pendingFillsPath(run);
+  if (!fs.existsSync(file)) return [];
+  try {
+    const value = readJson(file);
+    return Array.isArray(value) ? value : [];
+  } catch {
+    return [];
+  }
+}
+
+function writePendingFills(run, fills) {
+  writeJson(pendingFillsPath(run), fills);
+}
+
+function sameFillTarget(a, b) {
+  return a.role === b.role
+    && a.name === b.name
+    && a.selector === b.selector
+    && a['within-role'] === b['within-role']
+    && a.nth === b.nth;
+}
+
+function rememberFill(run, opts) {
+  const entry = {
+    url: rememberedUrl(run),
+    role: opts.role,
+    name: opts.name,
+    selector: opts.selector,
+    'within-role': opts['within-role'],
+    nth: opts.nth,
+    value: String(opts.value ?? ''),
+  };
+  const rest = readPendingFills(run).filter((fill) => !(fill.url === entry.url && sameFillTarget(fill, entry)));
+  writePendingFills(run, [...rest, entry]);
+}
+
+function clearPendingFills(run, url) {
+  if (!url) {
+    writePendingFills(run, []);
+    return;
+  }
+  writePendingFills(run, readPendingFills(run).filter((fill) => fill.url !== url));
+}
+
+async function applyPendingFills(page, run) {
+  const current = page.url();
+  const fills = readPendingFills(run).filter((fill) => fill.url === current);
+  for (const fill of fills) {
+    const locator = scopeLocator(page, fill);
+    await locator.first().waitFor({ state: 'visible' });
+    await locator.first().fill(String(fill.value ?? ''));
+  }
+}
+
+function evidenceFile(run, relative) {
+  if (path.isAbsolute(relative)) {
+    const evidenceRoot = path.join(SKILL_ROOT, 'evidence', run.runId);
+    if (!relative.startsWith(evidenceRoot)) {
+      throw new Error(`Proof files must be written under ${evidenceRoot}`);
+    }
+    return relative;
+  }
+  return path.join(SKILL_ROOT, 'evidence', run.runId, relative);
+}
+
+function scopeLocator(page, opts) {
+  let root = page;
+  if (opts.selector && opts.role) root = page.locator(opts.selector);
+  if (opts['within-role']) root = root.getByRole(opts['within-role']).first();
+  if (opts.role) {
+    const name = opts.name ? { name: opts.name } : {};
+    let locator = root.getByRole(opts.role, name);
+    if (opts.nth !== undefined) locator = locator.nth(Number(opts.nth));
+    return locator;
+  }
+  if (opts.selector) {
+    let locator = page.locator(opts.selector);
+    if (opts.nth !== undefined) locator = locator.nth(Number(opts.nth));
+    return locator;
+  }
+  throw new Error('A browser action needs --role or --selector.');
+}
+
+async function withPage(run, fn) {
+  const context = await launchBrowser(run);
+  try {
+    const page = context.pages()[0] || await context.newPage();
+    page.setDefaultTimeout(20000);
+    page.setDefaultNavigationTimeout(60000);
+    return await fn(page);
+  } finally {
+    await context.close();
+  }
+}
+
+async function openPage(page, run, target, { replayFills = false } = {}) {
+  if (!target.startsWith(run.url)) throw new Error(`Refusing to open ${target}. This harness only drives ${run.url}.`);
+  await page.goto(target, { waitUntil: 'domcontentloaded' });
+  await dismissCookie(page);
+  rememberUrl(run, page.url());
+  if (replayFills) await applyPendingFills(page, run);
+}
+
+function readAppSettings(run) {
+  const file = path.join(run.contentRoot, 'App_Data', 'appsettings.json');
+  if (!fs.existsSync(file)) return null;
+  try {
+    return readJson(file);
+  } catch {
+    return null;
+  }
+}
+
+function connectionLooksInstalled(run) {
+  const settings = readAppSettings(run);
+  const data = settings?.ConnectionStrings;
+  if (!data?.ConnectionString) return false;
+  const provider = String(data.DataProvider || '');
+  const connection = String(data.ConnectionString);
+  return /postgres/i.test(provider) && connection.toLowerCase().includes(`database=${run.database.toLowerCase()}`);
+}
+
+function describeAppSettings(run) {
+  const dir = path.join(run.contentRoot, 'App_Data');
+  if (!fs.existsSync(dir)) return 'App_Data is missing';
+  const names = fs.readdirSync(dir).slice(0, 40).join(', ');
+  const file = path.join(dir, 'appsettings.json');
+  if (!fs.existsSync(file)) return `appsettings.json is missing. App_Data contains: ${names}`;
+  const text = readText(file).replace(/Password=[^;"'\\]*/gi, 'Password=***');
+  return `App_Data contains: ${names}\n${text.slice(0, 1200)}`;
+}
+
+async function driveInstall(run) {
+  const context = await launchBrowser(run);
+  const page = context.pages()[0] || await context.newPage();
+  page.setDefaultTimeout(20000);
+  page.setDefaultNavigationTimeout(INSTALL_TIMEOUT_MS);
+  let formPost = '';
+  page.on('request', (request) => {
+    let pathname = '';
+    try { pathname = new URL(request.url()).pathname; } catch { return; }
+    // Progress polls POST /Install/Progress every second and must not replace the form body.
+    if (request.method() === 'POST' && /\/install\/?$/i.test(pathname)) {
+      formPost = request.postData() || '';
+    }
+  });
+  try {
+    await page.goto(`${run.url}/install`, { waitUntil: 'domcontentloaded' });
+    await page.locator('#installation-form').waitFor({ state: 'visible' });
+    await page.locator('#AdminEmail').fill(ADMIN_EMAIL);
+    await page.locator('#AdminPassword').fill(ADMIN_PASSWORD);
+    await page.locator('#ConfirmPassword').fill(ADMIN_PASSWORD);
+    await page.locator('#SubscribeNewsletters').setChecked(false);
+    await page.locator('#InstallSampleData').setChecked(true);
+    if (await page.locator('#Country').count()) await page.locator('#Country').selectOption('');
+    await page.locator('#DataProvider').selectOption({ label: 'PostgreSQL' });
+    await page.locator('#Username').waitFor({ state: 'visible' });
+    const integrated = page.locator('#IntegratedSecurity');
+    if (await integrated.isChecked().catch(() => false)) {
+      throw new Error('Integrated Windows authentication stayed checked. PostgreSQL install requires SQL username and password.');
+    }
+    await page.locator('#CreateDatabaseIfNotExists').setChecked(false);
+    await page.locator('#ConnectionStringRaw').setChecked(false);
+    await page.locator('#ServerName').fill('127.0.0.1');
+    await page.locator('#DatabaseName').fill(run.database);
+    await page.locator('#Username').fill(run.dbUser);
+    await page.locator('#Password').fill(run.dbPassword);
+    if (!(await page.locator('#InstallSampleData').isChecked())) {
+      throw new Error('Create sample data was not checked before submit.');
+    }
+    if (await page.locator('#SubscribeNewsletters').isChecked()) {
+      throw new Error('Subscribe to nopCommerce newsletter stayed checked. Refusing to submit.');
+    }
+    log('Submitting the installation form. Sample data can take several minutes.');
+    try {
+      await page.getByRole('button', { name: 'Install', exact: true }).click({ timeout: INSTALL_TIMEOUT_MS });
+    } catch (error) {
+      log(`Install click ended before a normal page load: ${error instanceof Error ? error.message : error}`);
+    }
+    const errorTextEarly = await page.locator('.message-error').innerText().catch(() => '');
+    if (!formPost) {
+      throw new Error(`The install form did not POST. ${errorTextEarly.trim()}`.trim());
+    }
+    if (!formPost.includes('InstallSampleData=true')) {
+      throw new Error(`The install POST did not include InstallSampleData=true. ${errorTextEarly.trim()}`.trim());
+    }
+    if (/(^|&)SubscribeNewsletters=true(&|$)/.test(formPost)) {
+      throw new Error('The install POST included SubscribeNewsletters=true.');
+    }
+    const errorText = await page.locator('.message-error').innerText().catch(() => '');
+    if (/setup failed|does not exist|permission|is required|wrong sql/i.test(errorText)) {
+      throw new Error(errorText.trim());
+    }
+  } finally {
+    await context.close();
+  }
+  await sleep(3000);
+  if (!connectionLooksInstalled(run)) {
+    throw new Error(`Installation did not write a PostgreSQL connection for ${run.database}.\n${describeAppSettings(run)}\n${tailFile(run.logPath)}`);
+  }
+  log('Installation wrote the connection string. Restarting the process so the store leaves the install page.');
+  stopPid(run.pid);
+  run.pid = null;
+}
+
+function newRunId() {
+  const time = new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);
+  const suffix = crypto.randomBytes(3).toString('hex');
+  return `r${time}${suffix}`;
+}
+
+function runPaths(runId) {
+  const runDir = path.join(RUNS_ROOT, runId);
+  return {
+    runId,
+    runDir,
+    statePath: path.join(runDir, 'state.json'),
+    contentRoot: path.join(runDir, 'app'),
+    logPath: path.join(runDir, 'server.log'),
+    evidenceDir: path.join(SKILL_ROOT, 'evidence', runId),
+  };
+}
+
+function loadRun(opts) {
+  const runId = opts.run || (fs.existsSync(CURRENT_PATH) ? fs.readFileSync(CURRENT_PATH, 'utf8').trim() : '');
+  if (!runId) throw new Error('No verification run is current. Run control-nopcommerce launch first.');
+  const statePath = path.join(RUNS_ROOT, runId, 'state.json');
+  if (!fs.existsSync(statePath)) throw new Error(`No state for run ${runId} at ${statePath}`);
+  return readJson(statePath);
+}
+
+async function launch() {
+  ensurePostgres();
+  const stamp = ensurePublish();
+  const role = ensureRole();
+  const runId = newRunId();
+  const run = {
+    ...runPaths(runId),
+    url: '',
+    port: 0,
+    pid: null,
+    database: `nopverify${runId}`,
+    dbUser: role.user,
+    dbPassword: role.password,
+    adminEmail: ADMIN_EMAIL,
+    adminPassword: ADMIN_PASSWORD,
+    dllSha256: stamp.dllSha256,
+    productVersion: stamp.productVersion,
+    commit: stamp.commit,
+    databaseCreated: false,
+  };
+  fs.mkdirSync(run.runDir, { recursive: true });
+  fs.mkdirSync(run.evidenceDir, { recursive: true });
+  try {
+    run.port = await freePort(18080);
+    run.url = `http://127.0.0.1:${run.port}`;
+    log(`Creating database ${run.database}`);
+    createDatabase(run.database);
+    run.databaseCreated = true;
+    assertDbLogin(run.database, run.dbUser, run.dbPassword);
+    log(`Copying the published site into ${run.contentRoot}`);
+    copyPublish(run.contentRoot);
+    writeJson(run.statePath, run);
+    fs.chmodSync(run.statePath, 0o600);
+    startServer(run);
+    await waitForHttp(`${run.url}/install`, (response, text) => response.status === 200 && text.includes('installation-form'), START_TIMEOUT_MS);
+    await driveInstall(run);
+    startServer(run);
+    await waitForHttp(`${run.url}/`, (response, text) => {
+      return response.status === 200
+        && text.includes('Your store name')
+        && text.includes('Computers')
+        && text.includes('Powered by')
+        && !text.includes('installation-form');
+    }, STORE_TIMEOUT_MS);
+    writeJson(run.statePath, run);
+    fs.chmodSync(run.statePath, 0o600);
+    fs.writeFileSync(CURRENT_PATH, `${run.runId}\n`);
+    process.stdout.write([
+      'ok=true',
+      `runId=${run.runId}`,
+      `url=${run.url}`,
+      `pid=${run.pid}`,
+      `database=${run.database}`,
+      `contentRoot=${run.contentRoot}`,
+      `evidenceDir=${run.evidenceDir}`,
+      `dllSha256=${run.dllSha256}`,
+      `productVersion=${run.productVersion}`,
+      `commit=${run.commit}`,
+      `adminEmail=${run.adminEmail}`,
+    ].join('\n') + '\n');
+  } catch (error) {
+    process.stderr.write(`${error instanceof Error ? error.stack : error}\n`);
+    if (run.logPath) process.stderr.write(`${tailFile(run.logPath)}\n`);
+    cleanupRun(run);
+    process.exit(1);
+  }
+}
+
+function doctor(opts) {
+  const run = loadRun(opts);
+  const failures = [];
+  const cmdline = readCmdline(run.pid);
+  if (!pidAlive(run.pid)) failures.push(`pid ${run.pid} is not running`);
+  else if (!cmdline.includes('Nop.Web.dll') || processCwd(run.pid) !== run.contentRoot) {
+    failures.push(`pid ${run.pid} is not Nop.Web.dll running from ${run.contentRoot}`);
+  }
+  if (pidAlive(run.pid) && !portOwnedByPid(run.port, run.pid)) {
+    failures.push(`port ${run.port} is not owned by pid ${run.pid}`);
+  }
+  const dll = path.join(run.contentRoot, 'Nop.Web.dll');
+  if (!fs.existsSync(dll)) failures.push(`missing ${dll}`);
+  else if (sha256File(dll) !== run.dllSha256) failures.push('Nop.Web.dll hash does not match the launch build');
+  let head = '';
+  try { head = gitHead(); } catch (error) { failures.push(error.message); }
+  if (head && run.commit && head !== run.commit && process.env.NOP_VERIFY_ALLOW_STALE !== '1') {
+    failures.push(`checkout ${head} does not match launch commit ${run.commit}`);
+  }
+  if (run.productVersion !== PRODUCT_VERSION) failures.push(`product version ${run.productVersion} does not match csproj ${PRODUCT_VERSION}`);
+  if (!connectionLooksInstalled(run)) failures.push('App_Data/appsettings.json is not a PostgreSQL connection for this database');
+  return { run, failures };
+}
+
+async function doctorCommand(opts) {
+  const { run, failures } = doctor(opts);
+  let homepage = '';
+  try {
+    const response = await fetch(`${run.url}/`, { redirect: 'manual' });
+    homepage = await response.text();
+    if (response.status !== 200) failures.push(`homepage status ${response.status}`);
+    if (!homepage.includes('Your store name')) failures.push('homepage does not show Your store name');
+    if (!homepage.includes('Computers')) failures.push('homepage does not show the Computers category');
+    if (!homepage.includes('Powered by')) failures.push('homepage does not show the nopCommerce footer');
+    if (homepage.includes('installation-form')) failures.push('homepage is still the installation form');
+  } catch (error) {
+    failures.push(`homepage request failed: ${error instanceof Error ? error.message : error}`);
+  }
+  try {
+    const response = await fetch(`${run.url}/login/`, { redirect: 'manual' });
+    const login = await response.text();
+    if (response.status !== 200 || !login.includes('Returning Customer')) {
+      failures.push('login page is not showing Returning Customer');
+    }
+  } catch (error) {
+    failures.push(`login request failed: ${error instanceof Error ? error.message : error}`);
+  }
+  const ok = failures.length === 0;
+  process.stdout.write([
+    `ok=${ok}`,
+    `url=${run.url}`,
+    `pid=${run.pid}`,
+    `port=${run.port}`,
+    `database=${run.database}`,
+    `contentRoot=${run.contentRoot}`,
+    `dllSha256=${run.dllSha256}`,
+    `productVersion=${run.productVersion}`,
+    `commit=${run.commit}`,
+    `adminEmail=${run.adminEmail}`,
+    `evidenceDir=${run.evidenceDir}`,
+    ...failures.map((failure) => `failure=${failure}`),
+  ].join('\n') + '\n');
+  process.exit(ok ? 0 : 1);
+}
+
+function cleanupRun(run) {
+  if (!run?.runDir || !run.runDir.startsWith(`${RUNS_ROOT}/`)) {
+    throw new Error(`Refusing to delete ${run?.runDir || 'an unknown directory'}`);
+  }
+  stopPid(run.pid);
+  if (run.databaseCreated || run.database) {
+    try { dropDatabase(run.database); } catch (error) {
+      log(`Database cleanup failed: ${error instanceof Error ? error.message : error}`);
+    }
+  }
+  fs.rmSync(run.runDir, { recursive: true, force: true });
+  if (fs.existsSync(CURRENT_PATH) && fs.readFileSync(CURRENT_PATH, 'utf8').trim() === run.runId) {
+    fs.rmSync(CURRENT_PATH, { force: true });
+  }
+}
+
+function cleanupCommand(opts) {
+  let run;
+  try { run = loadRun(opts); } catch (error) {
+    process.stdout.write(`ok=true\ncleaned=false\nmessage=${error instanceof Error ? error.message : error}\n`);
+    return;
+  }
+  const evidenceDir = run.evidenceDir || path.join(SKILL_ROOT, 'evidence', run.runId);
+  cleanupRun({ ...run, databaseCreated: true });
+  const evidenceRemains = fs.existsSync(evidenceDir);
+  process.stdout.write([
+    'ok=true',
+    'cleaned=true',
+    `runId=${run.runId}`,
+    `evidenceDir=${evidenceDir}`,
+    `evidenceRemains=${evidenceRemains}`,
+  ].join('\n') + '\n');
+}
+
+function credentialsCommand(opts) {
+  const run = loadRun(opts);
+  process.stdout.write(`adminEmail=${run.adminEmail}\nadminPassword=${run.adminPassword}\n`);
+}
+
+async function browserCommand(positional, opts) {
+  const action = positional[0];
+  if (!action) throw new Error('browser needs an action: open, click, fill, wait, absent, snapshot, screenshot, or url');
+  const run = loadRun(opts);
+  if (!pidAlive(run.pid)) throw new Error(`pid ${run.pid} is not running. Run doctor, then launch again if this run is gone.`);
+  await withPage(run, async (page) => {
+    const needsExisting = action !== 'open';
+    // Each command starts a fresh page at the remembered URL. Replay typed values
+    // so fill then click across two invocations still submits the same form.
+    if (needsExisting) await openPage(page, run, rememberedUrl(run), { replayFills: true });
+    if (action === 'open') {
+      const route = opts.path || '/';
+      const target = route.startsWith('http') ? route : `${run.url}${route.startsWith('/') ? '' : '/'}${route}`;
+      clearPendingFills(run);
+      await openPage(page, run, target);
+      process.stdout.write(`${page.url()}\n`);
+      return;
+    }
+    if (action === 'url') {
+      process.stdout.write(`${page.url()}\n`);
+      return;
+    }
+    if (action === 'fill') {
+      const locator = scopeLocator(page, opts);
+      await locator.first().waitFor({ state: 'visible' });
+      await locator.first().fill(String(opts.value ?? ''));
+      rememberUrl(run, page.url());
+      rememberFill(run, opts);
+      return;
+    }
+    if (action === 'click') {
+      const before = page.url();
+      const locator = scopeLocator(page, opts);
+      await locator.first().waitFor({ state: 'visible' });
+      await Promise.all([
+        page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => null),
+        locator.first().click(),
+      ]);
+      await page.waitForLoadState('domcontentloaded').catch(() => {});
+      await dismissCookie(page);
+      rememberUrl(run, page.url());
+      if (page.url() !== before) clearPendingFills(run, before);
+      process.stdout.write(`${page.url()}\n`);
+      return;
+    }
+    if (action === 'wait') {
+      await page.getByText(String(opts.text || ''), { exact: false }).first().waitFor({ state: 'visible', timeout: Number(opts.timeout || 20000) });
+      process.stdout.write(`${page.url()}\n`);
+      return;
+    }
+    if (action === 'absent') {
+      const locator = page.getByText(String(opts.text || ''), { exact: false });
+      const count = await locator.count();
+      for (let i = 0; i < count; i++) {
+        if (await locator.nth(i).isVisible()) {
+          throw new Error(`Visible text was present: ${opts.text}`);
+        }
+      }
+      process.stdout.write(`${page.url()}\n`);
+      return;
+    }
+    if (action === 'snapshot' || action === 'screenshot') {
+      if (!opts.path) throw new Error(`${action} needs --path`);
+      const destination = evidenceFile(run, opts.path);
+      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      if (action === 'screenshot') {
+        await page.screenshot({ path: destination, fullPage: true });
+      } else {
+        const aria = await page.locator('body').ariaSnapshot();
+        const body = `url: ${page.url()}\ntitle: ${await page.title()}\nstore: Your store name\n---\n${aria}\n`;
+        fs.writeFileSync(destination, body);
+      }
+      process.stdout.write(`${destination}\n`);
+      return;
+    }
+    throw new Error(`Unknown browser action ${action}`);
+  });
+}
+
+function usage() {
+  process.stderr.write(`Usage:
+  control-nopcommerce launch
+  control-nopcommerce doctor [--run ID]
+  control-nopcommerce credentials [--run ID]
+  control-nopcommerce cleanup [--run ID]
+  control-nopcommerce browser open --path /
+  control-nopcommerce browser click --role button --name Search --within-role search
+  control-nopcommerce browser fill --role textbox --name "Search store" --value computer --within-role search
+  control-nopcommerce browser wait --text "Build your own computer"
+  control-nopcommerce browser absent --text "Pride and Prejudice"
+  control-nopcommerce browser snapshot --aria --path search/results.aria.txt
+  control-nopcommerce browser screenshot --path search/results.png
+  control-nopcommerce browser url
+`);
+}
+
+const { positional, opts } = parseArgs(process.argv.slice(2));
+const command = positional[0];
+
+try {
+  if (command === 'launch') await launch();
+  else if (command === 'doctor') await doctorCommand(opts);
+  else if (command === 'cleanup') cleanupCommand(opts);
+  else if (command === 'credentials') credentialsCommand(opts);
+  else if (command === 'browser') await browserCommand(positional.slice(1), opts);
+  else {
+    usage();
+    process.exit(command ? 1 : 0);
+  }
+} catch (error) {
+  process.stderr.write(`${error instanceof Error ? error.stack : error}\n`);
+  process.exit(1);
+}
