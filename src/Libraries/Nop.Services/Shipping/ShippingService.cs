@@ -1,4 +1,5 @@
-﻿using Nop.Core;
+﻿using System.Globalization;
+using Nop.Core;
 using Nop.Core.Domain.Catalog;
 using Nop.Core.Domain.Common;
 using Nop.Core.Domain.Customers;
@@ -167,6 +168,19 @@ public partial class ShippingService : IShippingService
         return (width, length, height);
     }
 
+    /// <summary>
+    /// Converts a double the way .NET 10 and earlier converted it to decimal: 15 significant digits, ties to even.
+    /// Cube roots of perfect volumes are not exact in binary floating point, and that older rounding keeps dimensions such as 4.
+    /// </summary>
+    /// <param name="value">Value produced by a double calculation</param>
+    /// <returns>Decimal with the pre-.NET 11 conversion</returns>
+    private static decimal ToDecimalFromDouble(double value)
+    {
+        Span<char> text = stackalloc char[32];
+        value.TryFormat(text, out var length, "G15", CultureInfo.InvariantCulture);
+        return decimal.Parse(text[..length], NumberStyles.Float, CultureInfo.InvariantCulture);
+    }
+
     #endregion
 
     #region Methods
@@ -330,7 +344,7 @@ public partial class ShippingService : IShippingService
             }
 
             //set dimensions as cube root of volume
-            width = length = height = Convert.ToDecimal(Math.Pow(Convert.ToDouble(totalVolume), 1.0 / 3.0));
+            width = length = height = ToDecimalFromDouble(Math.Pow(Convert.ToDouble(totalVolume), 1.0 / 3.0));
 
             //sometimes we have products with sizes like 1x1x20
             //that's why let's ensure that a maximum dimension is always preserved

@@ -1,0 +1,27 @@
+---
+description: Keep .NET TFM, SDK, CI, Docker, and Microsoft.* packages on the same major
+alwaysApply: true
+---
+
+# .NET version pins
+
+When changing the target framework or SDK, update every pin in the same change:
+
+1. `src/Directory.Build.props` and any csproj that hardcodes `<TargetFramework>`
+2. Plugin `Notes.txt` samples that show a TFM
+3. `global.json` SDK version (`allowPrerelease: true` only for prerelease SDKs)
+4. `.github/workflows/dotnet.yml` `dotnet-version`
+5. `Dockerfile` `mcr.microsoft.com/dotnet/sdk` and `aspnet` tags
+6. Matching `Microsoft.AspNetCore.*`, `Microsoft.Extensions.*`, `Microsoft.Data.Sqlite`, and `System.Configuration.ConfigurationManager` package versions
+
+```xml
+<!-- ❌ BAD: TFM bumped, packages still on the previous major -->
+<TargetFramework>net11.0</TargetFramework>
+<PackageReference Include="Microsoft.AspNetCore.Mvc.NewtonsoftJson" Version="10.0.12" />
+
+<!-- ✅ GOOD: TFM and framework packages on the same train -->
+<TargetFramework>net11.0</TargetFramework>
+<PackageReference Include="Microsoft.AspNetCore.Mvc.NewtonsoftJson" Version="11.0.0-rc.3.26522.148" />
+```
+
+Do not rewrite unrelated versions (npm lockfiles, third-party NuGet majors). For a full upgrade workflow, follow `.cursor/skills/upgrade-dotnet/SKILL.md`.

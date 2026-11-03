@@ -1,4 +1,5 @@
-﻿using AwesomeAssertions;
+﻿using System.Globalization;
+using AwesomeAssertions;
 using Nop.Core.Domain.Catalog;
 using Nop.Core.Domain.Customers;
 using Nop.Core.Domain.Discounts;
@@ -625,10 +626,12 @@ public class OrderTotalCalculationServiceTests : ServiceTest
     [TestCase(12.119, 12.12)]
     [TestCase(12.115, 12.12)]
     [TestCase(12.114, 12.11)]
-    public async Task TestGetUnitPriceWhenRoundPricesDuringCalculationIsTruePriceMustBeRounded(decimal inputPrice, decimal expectedPrice)
+    public async Task TestGetUnitPriceWhenRoundPricesDuringCalculationIsTruePriceMustBeRounded(double inputPrice, double expectedPrice)
     {
         // arrange
-        var shoppingCartItem = await CreateTestShopCartItemAsync(inputPrice);
+        // NUnit stores TestCase numbers as doubles. Convert with 15 significant digits so the
+        // values match the decimals written in the attributes on .NET 11.
+        var shoppingCartItem = await CreateTestShopCartItemAsync(ToDecimal(inputPrice));
 
         // act
         _shoppingCartSettings.RoundPricesDuringCalculation = true;
@@ -637,7 +640,7 @@ public class OrderTotalCalculationServiceTests : ServiceTest
         var (resultPrice, _, _) = await GetService<IShoppingCartService>().GetUnitPriceAsync(shoppingCartItem, true);
 
         // assert
-        resultPrice.Should().Be(expectedPrice);
+        resultPrice.Should().Be(ToDecimal(expectedPrice));
     }
 
     [Test]
@@ -645,10 +648,10 @@ public class OrderTotalCalculationServiceTests : ServiceTest
     [TestCase(12.119, 12.119)]
     [TestCase(12.115, 12.115)]
     [TestCase(12.114, 12.114)]
-    public async Task TestGetUnitPriceWhenNotRoundPricesDuringCalculationIsFalsePriceMustNotBeRounded(decimal inputPrice, decimal expectedPrice)
+    public async Task TestGetUnitPriceWhenNotRoundPricesDuringCalculationIsFalsePriceMustNotBeRounded(double inputPrice, double expectedPrice)
     {
-        // arrange            
-        var shoppingCartItem = await CreateTestShopCartItemAsync(inputPrice);
+        // arrange
+        var shoppingCartItem = await CreateTestShopCartItemAsync(ToDecimal(inputPrice));
 
         // act
         _shoppingCartSettings.RoundPricesDuringCalculation = false;
@@ -657,7 +660,14 @@ public class OrderTotalCalculationServiceTests : ServiceTest
         var (resultPrice, _, _) = await GetService<IShoppingCartService>().GetUnitPriceAsync(shoppingCartItem, true);
 
         // assert
-        resultPrice.Should().Be(expectedPrice);
+        resultPrice.Should().Be(ToDecimal(expectedPrice));
+    }
+
+    private static decimal ToDecimal(double value)
+    {
+        Span<char> text = stackalloc char[32];
+        value.TryFormat(text, out var length, "G15", CultureInfo.InvariantCulture);
+        return decimal.Parse(text[..length], NumberStyles.Float, CultureInfo.InvariantCulture);
     }
 
     [Test]

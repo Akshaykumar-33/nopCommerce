@@ -1,4 +1,5 @@
-﻿using AwesomeAssertions;
+﻿using System.Globalization;
+using AwesomeAssertions;
 using Nop.Core.Domain.Catalog;
 using Nop.Core.Domain.Customers;
 using Nop.Core.Domain.Directory;
@@ -244,9 +245,18 @@ public class PriceCalculationServiceTests : ServiceTest
     [TestCase(12.01, 13.00, RoundingType.Rounding1Up)]
     [TestCase(12.99, 13.00, RoundingType.Rounding1Up)]
     [TestCase(12.00, 12.00, RoundingType.Rounding1Up)]
-    public void CanRound(decimal valueToRounding, decimal roundedValue, RoundingType roundingType)
+    public void CanRound(double valueToRounding, double roundedValue, RoundingType roundingType)
     {
-        _priceCalcService.Round(valueToRounding, roundingType).Should().Be(roundedValue);
+        // NUnit stores TestCase numbers as doubles. Convert with 15 significant digits so the
+        // values match the decimals written in the attributes on .NET 11.
+        _priceCalcService.Round(ToDecimal(valueToRounding), roundingType).Should().Be(ToDecimal(roundedValue));
+    }
+
+    private static decimal ToDecimal(double value)
+    {
+        Span<char> text = stackalloc char[32];
+        value.TryFormat(text, out var length, "G15", CultureInfo.InvariantCulture);
+        return decimal.Parse(text[..length], NumberStyles.Float, CultureInfo.InvariantCulture);
     }
 
     #endregion
