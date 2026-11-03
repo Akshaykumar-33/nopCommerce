@@ -135,7 +135,54 @@ public static class ServiceCollectionExtensions
                             Window = TimeSpan.FromMinutes(1)
                         }));
 
-                options.RejectionStatusCode = commonConfig.RejectionStatusCode;
+                // prefer configured value, fall back to HTTP 429 for client exponential backoff
+                options.RejectionStatusCode = commonConfig.RejectionStatusCode > 0
+                    ? commonConfig.RejectionStatusCode
+                    : NopRateLimitDefaults.RejectionStatusCode;
+
+                options.OnRejected = async (context, cancellationToken) =>
+                {
+                    var httpContext = context.HttpContext;
+
+                    // Retry-After enables clients to apply exponential backoff
+                    var retryAfterSeconds = NopRateLimitDefaults.DefaultRetryAfterSeconds;
+                    if (context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter) && retryAfter > TimeSpan.Zero)
+                        retryAfterSeconds = (int)Math.Ceiling(retryAfter.TotalSeconds);
+
+                    httpContext.Response.Headers.RetryAfter = retryAfterSeconds.ToString();
+                    httpContext.Response.StatusCode = options.RejectionStatusCode;
+
+                    // log rate-limit event to the admin system log (error dashboard)
+                    if (DataSettingsManager.IsDatabaseInstalled())
+                    {
+                        try
+                        {
+                            var logger = httpContext.RequestServices.GetService<Nop.Services.Logging.ILogger>();
+                            if (logger != null)
+                            {
+                                Nop.Core.Domain.Customers.Customer customer = null;
+                                var workContext = httpContext.RequestServices.GetService<IWorkContext>();
+                                if (workContext != null)
+                                    customer = await workContext.GetCurrentCustomerAsync();
+
+                                var path = httpContext.Request.Path.Value ?? string.Empty;
+                                var method = httpContext.Request.Method;
+                                var shortMessage = $"{NopRateLimitDefaults.LogMessagePrefix}: {method} {path}";
+                                var fullMessage =
+                                    $"Inbound request rejected by rate limiter.{Environment.NewLine}" +
+                                    $"Status code: {options.RejectionStatusCode}{Environment.NewLine}" +
+                                    $"Retry-After: {retryAfterSeconds} seconds{Environment.NewLine}" +
+                                    $"Partition: {httpContext.User.Identity?.Name ?? httpContext.Request.Headers.Host.ToString()}";
+
+                                await logger.ErrorAsync(shortMessage, new Exception(fullMessage), customer);
+                            }
+                        }
+                        catch
+                        {
+                            // never break the rejection path because of logging failures
+                        }
+                    }
+                };
             });
         }
 
@@ -456,7 +503,7 @@ public static class ServiceCollectionExtensions
         services.AddHttpClient(NopHttpDefaults.DefaultHttpClient).WithProxy();
 
         //client to request current store
-        services.AddHttpClient<StoreHttpClient>();
+        services.AddHttpClient<StoreHttpClient>().WithRateLimitRetry();
 
         //client to request nopCommerce official site
         services.AddHttpClient<NopHttpClient>().WithProxy();

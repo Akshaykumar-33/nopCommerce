@@ -28,6 +28,7 @@ using Nop.Services.FilterLevels;
 using Nop.Services.Gdpr;
 using Nop.Services.Helpers;
 using Nop.Services.Html;
+using Nop.Services.Http;
 using Nop.Services.Installation;
 using Nop.Services.Localization;
 using Nop.Services.Logging;
@@ -218,6 +219,7 @@ public partial class NopStartup : INopStartup
         services.AddScoped<ICheckVatService, CheckVatService>();
         services.AddScoped<ITaxService, TaxService>();
         services.AddScoped<ILogger, DefaultLogger>();
+        services.AddTransient<RateLimitRetryHandler>();
         services.AddScoped<ICustomerActivityService, CustomerActivityService>();
         services.AddScoped<IGdprService, GdprService>();
         services.AddScoped<IBlogService, BlogService>();

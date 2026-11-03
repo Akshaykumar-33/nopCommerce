@@ -68,6 +68,7 @@ public partial class CommonConfig : IConfig
 
     /// <summary>
     /// Default status code to set on the response when a request is rejected.
+    /// Defaults to 429 (Too Many Requests) to allow clients to apply exponential backoff using Retry-After.
     /// </summary>
-    public int RejectionStatusCode { get; set; } = 503;
+    public int RejectionStatusCode { get; set; } = 429;
 }

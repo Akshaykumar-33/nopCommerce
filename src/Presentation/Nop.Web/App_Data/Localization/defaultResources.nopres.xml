@@ -5101,7 +5101,7 @@
     <Value>Rejection status code</Value>
   </LocaleResource>
   <LocaleResource Name="Admin.Configuration.AppSettings.Common.RejectionStatusCode.Hint">
-    <Value>Default status code to set on the response when a request is rejected.</Value>
+    <Value>Default status code to set on the response when a request is rejected. Use 429 (Too Many Requests) so clients can apply exponential backoff using the Retry-After header. Rejected requests are also written to System Log.</Value>
   </LocaleResource>
   <LocaleResource Name="Admin.Configuration.AppSettings.Common.ScheduleTaskRunTimeout">
     <Value>Schedule task run timeout</Value>

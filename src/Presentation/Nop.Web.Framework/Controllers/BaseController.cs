@@ -30,6 +30,7 @@ namespace Nop.Web.Framework.Controllers;
 [SaveLastVisitedPage]
 [ForceMultiFactorAuthentication]
 [AutoValidation]
+[HandleRateLimit]
 public abstract partial class BaseController : Controller
 {
     #region Rendering
