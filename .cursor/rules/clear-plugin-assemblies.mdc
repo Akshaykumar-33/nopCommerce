@@ -1,7 +1,6 @@
 ---
 description: Rebuild checked-in ClearPluginAssemblies when its TFM or source changes
-globs: src/Build/**/*
-alwaysApply: false
+alwaysApply: true
 ---
 
 # ClearPluginAssemblies

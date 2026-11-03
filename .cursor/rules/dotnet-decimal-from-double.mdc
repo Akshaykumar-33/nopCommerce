@@ -1,7 +1,6 @@
 ---
 description: Avoid raw double-to-decimal conversions for prices, money, and shipping dimensions
-globs: **/PriceCalculation*.cs,**/OrderTotal*.cs,**/ShippingService.cs,**/CalculateDimensions*.cs,**/*Price*Tests.cs,**/*OrderTotal*Tests.cs
-alwaysApply: false
+alwaysApply: true
 ---
 
 # Decimal vs double

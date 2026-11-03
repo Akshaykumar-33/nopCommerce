@@ -1,7 +1,6 @@
 ---
 description: Keep .NET TFM, SDK, CI, Docker, and Microsoft.* packages on the same major
-globs: global.json,**/Directory.Build.props,**/*.csproj,Dockerfile,.github/workflows/*.yml
-alwaysApply: false
+alwaysApply: true
 ---
 
 # .NET version pins
