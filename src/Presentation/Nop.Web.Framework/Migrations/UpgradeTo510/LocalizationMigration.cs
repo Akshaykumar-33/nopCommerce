@@ -36,7 +36,7 @@ public class LocalizationMigration : MigrationBase
 
         this.AddOrUpdateLocaleResource(new Dictionary<string, string>
         {
-            
+            ["Admin.Configuration.AppSettings.Common.RejectionStatusCode.Hint"] = "Default status code to set on the response when a request is rejected. Use 429 (Too Many Requests) so clients can apply exponential backoff using the Retry-After header. Rejected requests are also written to System Log."
         });
 
         #endregion

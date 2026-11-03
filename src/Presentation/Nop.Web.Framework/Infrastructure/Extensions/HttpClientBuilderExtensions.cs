@@ -1,6 +1,7 @@
 ﻿using System.Net;
 using Microsoft.Extensions.DependencyInjection;
 using Nop.Core.Domain.Security;
+using Nop.Services.Http;
 
 namespace Nop.Web.Framework.Infrastructure.Extensions;
 
@@ -48,5 +49,20 @@ public static class HttpClientBuilderExtensions
 
             return handler;
         });
+
+        //retry outbound HTTP 429 responses with exponential backoff
+        httpClientBuilder.WithRateLimitRetry();
+    }
+
+    /// <summary>
+    /// Adds HTTP 429 handling with exponential backoff and admin system-log events
+    /// </summary>
+    /// <param name="httpClientBuilder">A builder for configuring HttpClient</param>
+    /// <returns>A builder for configuring HttpClient</returns>
+    public static IHttpClientBuilder WithRateLimitRetry(this IHttpClientBuilder httpClientBuilder)
+    {
+        ArgumentNullException.ThrowIfNull(httpClientBuilder);
+
+        return httpClientBuilder.AddHttpMessageHandler<RateLimitRetryHandler>();
     }
 }

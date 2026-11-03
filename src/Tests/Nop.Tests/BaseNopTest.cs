@@ -55,6 +55,7 @@ using Nop.Services.FilterLevels;
 using Nop.Services.Gdpr;
 using Nop.Services.Helpers;
 using Nop.Services.Html;
+using Nop.Services.Http;
 using Nop.Services.Installation;
 using Nop.Services.Localization;
 using Nop.Services.Logging;
@@ -192,11 +193,14 @@ public partial class BaseNopTest
         services.AddTransient<INopFileProvider, NopFileProvider>();
         CommonHelper.DefaultFileProvider = new NopFileProvider(webHostEnvironment.Object);
 
+        // HTTP 429 retry handler (required by WithProxy / WithRateLimitRetry)
+        services.AddTransient<RateLimitRetryHandler>();
+
         //default client
         services.AddHttpClient(NopHttpDefaults.DefaultHttpClient).WithProxy();
 
         //client to request current store
-        services.AddHttpClient<StoreHttpClient>();
+        services.AddHttpClient<StoreHttpClient>().WithRateLimitRetry();
 
         //client to request nopCommerce official site
         services.AddHttpClient<NopHttpClient>().WithProxy();
