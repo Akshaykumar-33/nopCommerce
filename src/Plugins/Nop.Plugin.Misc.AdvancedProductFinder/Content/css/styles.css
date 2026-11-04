@@ -43,6 +43,11 @@
   gap: 0.5rem;
 }
 
+.finder-filter-form .price-currency {
+  font-weight: 500;
+  color: #666;
+}
+
 .finder-filter-form .spec-group {
   margin-bottom: 0.85rem;
 }

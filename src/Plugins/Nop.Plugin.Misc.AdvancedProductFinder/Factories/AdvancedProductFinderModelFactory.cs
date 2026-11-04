@@ -1,8 +1,10 @@
+using System.Globalization;
 using Microsoft.AspNetCore.Mvc.Rendering;
 using Nop.Core;
 using Nop.Core.Domain.Catalog;
 using Nop.Plugin.Misc.AdvancedProductFinder.Models;
 using Nop.Services.Catalog;
+using Nop.Services.Directory;
 using Nop.Services.Localization;
 using Nop.Services.Security;
 using Nop.Services.Stores;
@@ -23,6 +25,7 @@ public class AdvancedProductFinderModelFactory : IAdvancedProductFinderModelFact
     protected readonly CatalogSettings _catalogSettings;
     protected readonly IAclService _aclService;
     protected readonly ICategoryService _categoryService;
+    protected readonly ICurrencyService _currencyService;
     protected readonly ILocalizationService _localizationService;
     protected readonly IManufacturerService _manufacturerService;
     protected readonly INopUrlHelper _nopUrlHelper;
@@ -43,6 +46,7 @@ public class AdvancedProductFinderModelFactory : IAdvancedProductFinderModelFact
         CatalogSettings catalogSettings,
         IAclService aclService,
         ICategoryService categoryService,
+        ICurrencyService currencyService,
         ILocalizationService localizationService,
         IManufacturerService manufacturerService,
         INopUrlHelper nopUrlHelper,
@@ -58,6 +62,7 @@ public class AdvancedProductFinderModelFactory : IAdvancedProductFinderModelFact
         _catalogSettings = catalogSettings;
         _aclService = aclService;
         _categoryService = categoryService;
+        _currencyService = currencyService;
         _localizationService = localizationService;
         _manufacturerService = manufacturerService;
         _nopUrlHelper = nopUrlHelper;
@@ -285,6 +290,67 @@ public class AdvancedProductFinderModelFactory : IAdvancedProductFinderModelFact
         return (await _productModelFactory.PrepareProductOverviewModelsAsync(relatedProducts)).ToList();
     }
 
+    /// <summary>
+    /// Parses a price posted by an input type="number".
+    /// The control's value is always a period-decimal number, even when the current culture uses a comma.
+    /// </summary>
+    /// <param name="rawPrice">Posted price</param>
+    /// <param name="price">Parsed working-currency amount</param>
+    /// <returns>True when <paramref name="rawPrice"/> is a valid number</returns>
+    protected virtual bool TryParsePriceInput(string rawPrice, out decimal price)
+    {
+        price = decimal.Zero;
+
+        if (string.IsNullOrWhiteSpace(rawPrice))
+            return false;
+
+        return decimal.TryParse(
+            rawPrice.Trim(),
+            NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint | NumberStyles.AllowLeadingWhite | NumberStyles.AllowTrailingWhite,
+            CultureInfo.InvariantCulture,
+            out price);
+    }
+
+    /// <summary>
+    /// Rewrites a posted price into the period-decimal form an input type="number" can display
+    /// </summary>
+    /// <param name="rawPrice">Posted price</param>
+    /// <returns>Invariant price text, or null when the value is empty or not a number</returns>
+    protected virtual string NormalizePriceInput(string rawPrice)
+    {
+        if (!TryParsePriceInput(rawPrice, out var price))
+            return null;
+
+        return price.ToString(CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// Converts positive working-currency price inputs to the primary store currency stored on <see cref="Product.Price"/>
+    /// </summary>
+    /// <param name="priceFrom">Minimum price entered by the customer</param>
+    /// <param name="priceTo">Maximum price entered by the customer</param>
+    /// <returns>Primary-store-currency bounds. A bound is null when that input is empty or not a positive price</returns>
+    protected virtual async Task<(decimal? Min, decimal? Max)> GetPriceBoundsInPrimaryStoreCurrencyAsync(string priceFrom, string priceTo)
+    {
+        var hasMin = TryParsePriceInput(priceFrom, out var from) && from > decimal.Zero;
+        var hasMax = TryParsePriceInput(priceTo, out var to) && to > decimal.Zero;
+
+        if (!hasMin && !hasMax)
+            return (null, null);
+
+        var workingCurrency = await _workContext.GetWorkingCurrencyAsync();
+
+        var min = hasMin
+            ? await _currencyService.ConvertToPrimaryStoreCurrencyAsync(from, workingCurrency)
+            : (decimal?)null;
+
+        var max = hasMax
+            ? await _currencyService.ConvertToPrimaryStoreCurrencyAsync(to, workingCurrency)
+            : (decimal?)null;
+
+        return (min, max);
+    }
+
     #endregion
 
     #region Methods
@@ -302,6 +368,11 @@ public class AdvancedProductFinderModelFactory : IAdvancedProductFinderModelFact
         await PrepareManufacturerFilterAsync(model);
         await PrepareSortOptionsAsync(model);
         await PrepareSpecificationFiltersAsync(model);
+
+        var workingCurrency = await _workContext.GetWorkingCurrencyAsync();
+        model.WorkingCurrencyCode = workingCurrency?.CurrencyCode;
+        model.PriceFrom = NormalizePriceInput(model.PriceFrom);
+        model.PriceTo = NormalizePriceInput(model.PriceTo);
 
         model.Products = await PrepareFinderProductsModelAsync(model);
         model.RecentlyViewedProducts = await PrepareRecentlyViewedAsync();
@@ -331,13 +402,7 @@ public class AdvancedProductFinderModelFactory : IAdvancedProductFinderModelFact
             ? new List<int> { model.ManufacturerId }
             : null;
 
-        decimal? priceMin = null;
-        decimal? priceMax = null;
-
-        if (decimal.TryParse(model.PriceFrom, out var from) && from > 0)
-            priceMin = from;
-        if (decimal.TryParse(model.PriceTo, out var to) && to > 0)
-            priceMax = to;
+        var (priceMin, priceMax) = await GetPriceBoundsInPrimaryStoreCurrencyAsync(model.PriceFrom, model.PriceTo);
 
         var selectedSpecIds = ParseSpecOptionIds(model.SpecOptionIds);
         IList<SpecificationAttributeOption> filteredSpecOptions = null;

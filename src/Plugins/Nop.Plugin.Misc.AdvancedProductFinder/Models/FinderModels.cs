@@ -19,6 +19,11 @@ public record FinderModel : BaseNopModel
 
     public string PriceTo { get; set; }
 
+    /// <summary>
+    /// Gets or sets the working currency code. Price inputs are amounts in this currency.
+    /// </summary>
+    public string WorkingCurrencyCode { get; set; }
+
     public string SpecOptionIds { get; set; }
 
     public int PageNumber { get; set; } = 1;

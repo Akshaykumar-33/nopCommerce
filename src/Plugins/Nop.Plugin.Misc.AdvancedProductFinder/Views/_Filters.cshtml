@@ -17,10 +17,16 @@
     </div>
 
     <div class="filter-block price-block">
-        <label>@T("Plugins.Misc.AdvancedProductFinder.PriceFrom")</label>
+        <label>
+            @T("Plugins.Misc.AdvancedProductFinder.PriceFrom")
+            @if (!string.IsNullOrEmpty(Model.WorkingCurrencyCode))
+            {
+                <span class="price-currency">(@Model.WorkingCurrencyCode)</span>
+            }
+        </label>
         <div class="price-inputs">
-            <input asp-for="PriceFrom" type="number" min="0" step="0.01" placeholder="@T("Plugins.Misc.AdvancedProductFinder.PriceFrom")" />
-            <input asp-for="PriceTo" type="number" min="0" step="0.01" placeholder="@T("Plugins.Misc.AdvancedProductFinder.PriceTo")" />
+            <input asp-for="PriceFrom" type="number" lang="en" min="0" step="0.01" placeholder="@T("Plugins.Misc.AdvancedProductFinder.PriceFrom")" />
+            <input asp-for="PriceTo" type="number" lang="en" min="0" step="0.01" placeholder="@T("Plugins.Misc.AdvancedProductFinder.PriceTo")" />
         </div>
     </div>
 
