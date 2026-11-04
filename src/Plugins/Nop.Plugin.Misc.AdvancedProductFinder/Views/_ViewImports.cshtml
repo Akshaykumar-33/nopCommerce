@@ -1,0 +1,14 @@
+@inherits Nop.Web.Framework.Mvc.Razor.NopRazorPage<TModel>
+@addTagHelper *, Microsoft.AspNetCore.Mvc.TagHelpers
+@addTagHelper *, Nop.Web.Framework
+
+@inject INopHtmlHelper NopHtml
+
+@using System.Text.Encodings.Web
+@using Microsoft.AspNetCore.Mvc.ViewFeatures
+@using Nop.Plugin.Misc.AdvancedProductFinder
+@using Nop.Plugin.Misc.AdvancedProductFinder.Models
+@using Nop.Web.Extensions
+@using Nop.Web.Framework.Extensions
+@using Nop.Web.Framework.UI
+@using Nop.Web.Models.Catalog

@@ -1,0 +1,12 @@
+@model FinderWidgetModel
+
+@if (!string.IsNullOrEmpty(Model?.FinderUrl))
+{
+    <div class="advanced-product-finder-widget">
+        <div class="finder-widget-content">
+            <h2>@Model.Title</h2>
+            <p>@Model.Description</p>
+            <a class="button-1 finder-widget-button" href="@Model.FinderUrl">@Model.ButtonText</a>
+        </div>
+    </div>
+}

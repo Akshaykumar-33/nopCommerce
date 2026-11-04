@@ -1,0 +1,48 @@
+@model FinderModel
+
+@{
+    Layout = "_ColumnsTwo";
+    NopHtml.AddTitleParts(T("Plugins.Misc.AdvancedProductFinder.Title").Text);
+    NopHtml.AppendPageCssClassParts("html-advanced-product-finder-page");
+}
+
+<link rel="stylesheet" href="~/Plugins/Misc.AdvancedProductFinder/Content/css/styles.css" />
+
+<div class="page advanced-product-finder-page">
+    <div class="page-title">
+        <h1>@T("Plugins.Misc.AdvancedProductFinder.Title")</h1>
+    </div>
+    <div class="page-body">
+        <p class="finder-subtitle">@T("Plugins.Misc.AdvancedProductFinder.Subtitle")</p>
+
+        <div class="finder-layout">
+            <aside class="finder-filters">
+                @await Html.PartialAsync("~/Plugins/Misc.AdvancedProductFinder/Views/_Filters.cshtml", Model)
+            </aside>
+
+            <section class="finder-results">
+                <div class="finder-results-header">
+                    <h2>@T("Plugins.Misc.AdvancedProductFinder.Results")</h2>
+                    <div class="finder-results-count" data-finder-count>
+                        @string.Format(T("Plugins.Misc.AdvancedProductFinder.ResultsCount").Text, Model.Products.TotalItems)
+                    </div>
+                </div>
+                <div id="finder-products" data-products-url="@Model.GetProductsUrl">
+                    @await Html.PartialAsync("~/Plugins/Misc.AdvancedProductFinder/Views/_Products.cshtml", Model.Products)
+                </div>
+            </section>
+        </div>
+
+        @if (Model.ShowRecentlyViewed)
+        {
+            @await Html.PartialAsync("~/Plugins/Misc.AdvancedProductFinder/Views/_RecentlyViewed.cshtml", Model.RecentlyViewedProducts)
+        }
+
+        @if (Model.ShowCompleteTheSet)
+        {
+            @await Html.PartialAsync("~/Plugins/Misc.AdvancedProductFinder/Views/_CompleteTheSet.cshtml", Model.CompleteTheSetProducts)
+        }
+    </div>
+</div>
+
+<script src="~/Plugins/Misc.AdvancedProductFinder/Content/js/finder.js" asp-location="Footer"></script>

@@ -1,0 +1,48 @@
+@model FinderProductsModel
+
+@if (!string.IsNullOrEmpty(Model.WarningMessage))
+{
+    <div class="finder-warning">@Model.WarningMessage</div>
+}
+else if (!Model.Products.Any())
+{
+    <div class="no-data">
+        @(Model.NoResultMessage ?? T("Plugins.Misc.AdvancedProductFinder.NoResults").Text)
+    </div>
+}
+else
+{
+    <div class="product-grid finder-product-grid" data-total-items="@Model.TotalItems">
+        <div class="item-grid">
+            @foreach (var product in Model.Products)
+            {
+                <div class="item-box">
+                    @await Html.PartialAsync("_ProductBox", product)
+                </div>
+            }
+        </div>
+    </div>
+
+    @if (Model.TotalPages > 1)
+    {
+        <div class="finder-pager pager">
+            <ul>
+                @if (Model.HasPreviousPage)
+                {
+                    <li class="previous-page">
+                        <a href="#" data-finder-page="@(Model.PageNumber - 1)">@T("Plugins.Misc.AdvancedProductFinder.Previous")</a>
+                    </li>
+                }
+                <li class="current-page">
+                    <span>@string.Format(T("Plugins.Misc.AdvancedProductFinder.Page").Text, Model.PageNumber, Model.TotalPages)</span>
+                </li>
+                @if (Model.HasNextPage)
+                {
+                    <li class="next-page">
+                        <a href="#" data-finder-page="@(Model.PageNumber + 1)">@T("Plugins.Misc.AdvancedProductFinder.Next")</a>
+                    </li>
+                }
+            </ul>
+        </div>
+    }
+}

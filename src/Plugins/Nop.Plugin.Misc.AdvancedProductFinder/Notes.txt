@@ -1,0 +1,10 @@
+Promotional note about Advanced Product Finder plugin for nopCommerce
+===========
+
+Advanced Product Finder adds a dedicated multi-filter discovery page with:
+- keyword, category, manufacturer, price, and specification filters
+- color swatches for specification options that define ColorSquaresRgb
+- AJAX product results with paging
+- recently viewed products
+- complete-the-set suggestions from related products or the same category
+- optional homepage CTA widget
