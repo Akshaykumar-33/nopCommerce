@@ -1,0 +1,16 @@
+@model IList<ProductOverviewModel>
+
+@if (Model?.Any() == true)
+{
+    <section class="product-grid finder-complete-the-set">
+        <h2 class="title">@T("Plugins.Misc.AdvancedProductFinder.CompleteTheSet")</h2>
+        <div class="item-grid">
+            @foreach (var product in Model)
+            {
+                <div class="item-box">
+                    @await Html.PartialAsync("_ProductBox", product)
+                </div>
+            }
+        </div>
+    </section>
+}

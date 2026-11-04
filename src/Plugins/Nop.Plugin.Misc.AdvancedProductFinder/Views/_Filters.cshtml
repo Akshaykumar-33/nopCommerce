@@ -1,0 +1,77 @@
+@model FinderModel
+
+<form id="advanced-product-finder-form" class="finder-filter-form" method="get">
+    <div class="filter-block">
+        <label asp-for="Keywords">@T("Plugins.Misc.AdvancedProductFinder.Keywords")</label>
+        <input asp-for="Keywords" class="keywords" placeholder="@T("Plugins.Misc.AdvancedProductFinder.Keywords")" />
+    </div>
+
+    <div class="filter-block">
+        <label asp-for="CategoryId">@T("Plugins.Misc.AdvancedProductFinder.Category")</label>
+        <select asp-for="CategoryId" asp-items="Model.AvailableCategories" class="category-filter"></select>
+    </div>
+
+    <div class="filter-block">
+        <label asp-for="ManufacturerId">@T("Plugins.Misc.AdvancedProductFinder.Manufacturer")</label>
+        <select asp-for="ManufacturerId" asp-items="Model.AvailableManufacturers" class="manufacturer-filter"></select>
+    </div>
+
+    <div class="filter-block price-block">
+        <label>
+            @T("Plugins.Misc.AdvancedProductFinder.PriceFrom")
+            @if (!string.IsNullOrEmpty(Model.WorkingCurrencyCode))
+            {
+                <span class="price-currency">(@Model.WorkingCurrencyCode)</span>
+            }
+        </label>
+        <div class="price-inputs">
+            <input asp-for="PriceFrom" type="number" lang="en" min="0" step="0.01" placeholder="@T("Plugins.Misc.AdvancedProductFinder.PriceFrom")" />
+            <input asp-for="PriceTo" type="number" lang="en" min="0" step="0.01" placeholder="@T("Plugins.Misc.AdvancedProductFinder.PriceTo")" />
+        </div>
+    </div>
+
+    <div class="filter-block">
+        <label asp-for="OrderBy">@T("Plugins.Misc.AdvancedProductFinder.SortBy")</label>
+        <select asp-for="OrderBy" asp-items="Model.AvailableSortOptions" class="sort-filter"></select>
+    </div>
+
+    @if (Model.SpecificationAttributes.Any())
+    {
+        <div class="filter-block specs-block">
+            <h3>@T("Plugins.Misc.AdvancedProductFinder.Specifications")</h3>
+            @foreach (var specAttr in Model.SpecificationAttributes)
+            {
+                <div class="spec-group @(specAttr.HasColorSquares ? "has-swatches" : string.Empty)">
+                    <div class="spec-name">@specAttr.Name</div>
+                    <ul class="spec-options @(specAttr.HasColorSquares ? "color-swatches" : string.Empty)">
+                        @foreach (var option in specAttr.Options)
+                        {
+                            <li class="spec-option @(!string.IsNullOrEmpty(option.ColorSquaresRgb) ? "color-option" : string.Empty)">
+                                <label>
+                                    <input type="checkbox"
+                                           class="spec-option-input"
+                                           value="@option.Id"
+                                           checked="@option.Selected"
+                                           data-option-id="@option.Id" />
+                                    @if (!string.IsNullOrEmpty(option.ColorSquaresRgb))
+                                    {
+                                        <span class="attribute-square" style="background-color:@(option.ColorSquaresRgb);" title="@option.Name"></span>
+                                    }
+                                    <span class="option-label">@option.Name</span>
+                                </label>
+                            </li>
+                        }
+                    </ul>
+                </div>
+            }
+        </div>
+    }
+
+    <input type="hidden" asp-for="SpecOptionIds" id="SpecOptionIds" />
+    <input type="hidden" asp-for="PageNumber" id="PageNumber" value="1" />
+
+    <div class="filter-actions">
+        <button type="submit" class="button-1 find-products-button">@T("Plugins.Misc.AdvancedProductFinder.Apply")</button>
+        <button type="button" class="button-2 reset-filters-button" data-finder-reset>@T("Plugins.Misc.AdvancedProductFinder.Reset")</button>
+    </div>
+</form>

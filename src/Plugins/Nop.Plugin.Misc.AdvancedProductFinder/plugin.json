@@ -1,0 +1,11 @@
+{
+  "Group": "Misc",
+  "FriendlyName": "Advanced Product Finder",
+  "SystemName": "Misc.AdvancedProductFinder",
+  "Version": "5.10.0",
+  "SupportedVersions": [ "5.10" ],
+  "Author": "nopCommerce community",
+  "DisplayOrder": 1,
+  "FileName": "Nop.Plugin.Misc.AdvancedProductFinder.dll",
+  "Description": "Multi-filter product finder with visual swatches, recently viewed products, and complete-the-set suggestions."
+}

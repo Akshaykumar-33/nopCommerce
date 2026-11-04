@@ -1,0 +1,148 @@
+.advanced-product-finder-page .finder-subtitle {
+  margin: 0 0 1.5rem;
+  color: #555;
+  max-width: 46rem;
+}
+
+.finder-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) 1fr;
+  gap: 1.5rem;
+  align-items: start;
+}
+
+.finder-filters {
+  background: #f7f7f7;
+  border: 1px solid #e5e5e5;
+  padding: 1rem;
+}
+
+.finder-filter-form .filter-block {
+  margin-bottom: 1rem;
+}
+
+.finder-filter-form label,
+.finder-filter-form .spec-name {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+}
+
+.finder-filter-form input[type="text"],
+.finder-filter-form input[type="number"],
+.finder-filter-form select,
+.finder-filter-form .keywords {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.45rem 0.55rem;
+}
+
+.finder-filter-form .price-inputs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+
+.finder-filter-form .price-currency {
+  font-weight: 500;
+  color: #666;
+}
+
+.finder-filter-form .spec-group {
+  margin-bottom: 0.85rem;
+}
+
+.finder-filter-form .spec-options {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.75rem;
+}
+
+.finder-filter-form .spec-option label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-weight: 400;
+  cursor: pointer;
+}
+
+.finder-filter-form .attribute-square {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  border: 1px solid #bbb;
+  border-radius: 2px;
+  vertical-align: middle;
+}
+
+.finder-filter-form .color-swatches .spec-option.color-option .option-label {
+  font-size: 0.85rem;
+}
+
+.finder-filter-form .filter-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.finder-results-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.finder-results-header h2 {
+  margin: 0;
+}
+
+.finder-results-count {
+  color: #666;
+  font-size: 0.95rem;
+}
+
+.finder-product-grid.loading {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.finder-pager ul {
+  list-style: none;
+  display: flex;
+  gap: 1rem;
+  padding: 0;
+  margin: 1rem 0 0;
+  align-items: center;
+}
+
+.finder-recently-viewed,
+.finder-complete-the-set {
+  margin-top: 2rem;
+}
+
+.advanced-product-finder-widget {
+  margin: 1.5rem 0;
+  padding: 1.5rem;
+  border: 1px solid #e5e5e5;
+  background: linear-gradient(135deg, #fafafa 0%, #f0f4f8 100%);
+}
+
+.advanced-product-finder-widget h2 {
+  margin: 0 0 0.5rem;
+}
+
+.advanced-product-finder-widget p {
+  margin: 0 0 1rem;
+  max-width: 40rem;
+}
+
+@media (max-width: 768px) {
+  .finder-layout {
+    grid-template-columns: 1fr;
+  }
+}
