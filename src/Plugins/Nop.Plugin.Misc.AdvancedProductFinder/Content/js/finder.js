@@ -24,8 +24,25 @@
     };
   }
 
+  function readResultTotal($container) {
+    var $total = $container.find('[data-total-items]').first();
+    if ($total.length) {
+      var parsed = parseInt($total.attr('data-total-items'), 10);
+      if (!isNaN(parsed)) {
+        return parsed;
+      }
+    }
+
+    // Empty-results markup has no product grid. A missing total means zero items.
+    if ($container.find('.no-data').length) {
+      return 0;
+    }
+
+    return undefined;
+  }
+
   function updateCount($container) {
-    var total = $container.find('[data-total-items]').data('total-items');
+    var total = readResultTotal($container);
     if (typeof total === 'undefined') {
       return;
     }

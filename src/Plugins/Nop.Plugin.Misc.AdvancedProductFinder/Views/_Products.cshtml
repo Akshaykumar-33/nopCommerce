@@ -6,7 +6,7 @@
 }
 else if (!Model.Products.Any())
 {
-    <div class="no-data">
+    <div class="no-data" data-total-items="@Model.TotalItems">
         @(Model.NoResultMessage ?? T("Plugins.Misc.AdvancedProductFinder.NoResults").Text)
     </div>
 }
