@@ -8,6 +8,7 @@ using Nop.Plugin.Misc.AdvancedProductFinder;
 using Nop.Plugin.Misc.AdvancedProductFinder.Factories;
 using Nop.Plugin.Misc.AdvancedProductFinder.Models;
 using Nop.Services.Catalog;
+using Nop.Services.Directory;
 using Nop.Services.Localization;
 using Nop.Services.Security;
 using Nop.Services.Stores;
@@ -104,6 +105,7 @@ public class AdvancedProductFinderModelFactoryTests
             new CatalogSettings(),
             Mock.Of<IAclService>(),
             categoryService.Object,
+            Mock.Of<ICurrencyService>(),
             localizationService.Object,
             manufacturerService.Object,
             Mock.Of<INopUrlHelper>(),
