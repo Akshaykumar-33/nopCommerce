@@ -133,23 +133,55 @@ public class AdvancedProductFinderModelFactory : IAdvancedProductFinderModelFact
         }
     }
 
+    /// <summary>
+    /// Sort options offered by the finder. Position is a category display order, so it is not listed.
+    /// </summary>
+    /// <returns>Sort options</returns>
+    protected virtual IList<ProductSortingEnum> GetFinderSortOptions()
+    {
+        return Enum.GetValues(typeof(ProductSortingEnum))
+            .Cast<ProductSortingEnum>()
+            .Where(value => value != ProductSortingEnum.Position)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Resolve the sort used for the current search and keep <paramref name="model"/> aligned with it.
+    /// Position and any value that is not offered fall back to the first remaining option. The dropdown
+    /// otherwise shows that option while the query still sorts by the default Position value.
+    /// </summary>
+    /// <param name="model">Finder model</param>
+    /// <returns>Sort option applied to the product query</returns>
+    protected virtual ProductSortingEnum ResolveOrderBy(FinderModel model)
+    {
+        ArgumentNullException.ThrowIfNull(model);
+
+        var sortOptions = GetFinderSortOptions();
+        if (sortOptions.Count == 0)
+            return ProductSortingEnum.Position;
+
+        if (Enum.IsDefined(typeof(ProductSortingEnum), model.OrderBy)
+            && sortOptions.Contains((ProductSortingEnum)model.OrderBy))
+            return (ProductSortingEnum)model.OrderBy;
+
+        var fallback = sortOptions[0];
+        model.OrderBy = (int)fallback;
+        return fallback;
+    }
+
     protected virtual async Task PrepareSortOptionsAsync(FinderModel model)
     {
-        foreach (ProductSortingEnum enumValue in Enum.GetValues(typeof(ProductSortingEnum)))
-        {
-            if (enumValue == ProductSortingEnum.Position)
-                continue;
+        var orderBy = ResolveOrderBy(model);
 
+        foreach (var enumValue in GetFinderSortOptions())
+        {
             model.AvailableSortOptions.Add(new SelectListItem
             {
                 Text = await _localizationService.GetLocalizedEnumAsync(enumValue),
                 Value = ((int)enumValue).ToString(),
-                Selected = model.OrderBy == (int)enumValue
+                Selected = orderBy == enumValue
             });
         }
-
-        if (!model.AvailableSortOptions.Any(x => x.Selected) && model.AvailableSortOptions.Any())
-            model.AvailableSortOptions.First().Selected = true;
     }
 
     protected virtual List<int> ParseSpecOptionIds(string specOptionIds)
@@ -409,9 +441,7 @@ public class AdvancedProductFinderModelFactory : IAdvancedProductFinderModelFact
         if (selectedSpecIds.Any())
             filteredSpecOptions = await _specificationAttributeService.GetSpecificationAttributeOptionsByIdsAsync(selectedSpecIds.ToArray());
 
-        var orderBy = Enum.IsDefined(typeof(ProductSortingEnum), model.OrderBy)
-            ? (ProductSortingEnum)model.OrderBy
-            : ProductSortingEnum.Position;
+        var orderBy = ResolveOrderBy(model);
 
         var products = await _productService.SearchProductsAsync(
             pageIndex: pageIndex,
